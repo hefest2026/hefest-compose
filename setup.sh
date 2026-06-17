@@ -31,20 +31,4 @@ fi
 cd "$SCRIPT_DIR"
 docker compose up -d --build
 
-# ── migrations ────────────────────────────────────────────────────────────────
-
-echo "Waiting for api to become healthy..."
-for i in $(seq 1 30); do
-    if docker compose exec api python -c \
-        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
-        2>/dev/null; then
-        break
-    fi
-    [[ $i -eq 30 ]] && { echo "API did not become healthy in time."; exit 1; }
-    sleep 2
-done
-
-echo "Running migrations..."
-docker compose exec api uv run tortoise -c hefest.config.TORTOISE_ORM migrate
-
 echo "Done. API: http://localhost:8000  Docs: http://localhost:8000/docs"
