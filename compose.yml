@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hefest
+      POSTGRES_PASSWORD: hefest
+      POSTGRES_DB: hefest_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hefest -d hefest_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../hefest-api
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      HEFEST_DB_URL: asyncpg://hefest:hefest@postgres:5432/hefest_db
+      HEFEST_REDIS_URL: redis://redis:6379
+    volumes:
+      # Hot-reload: mount source; preserve the container's venv
+      - ../hefest-api:/app
+      - api_venv:/app/.venv
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: uv run uvicorn hefest.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
+  api_venv:
