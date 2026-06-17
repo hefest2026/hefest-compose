@@ -10,7 +10,7 @@ clone_if_missing() {
     local dir="$1" repo="$2"
     if [[ ! -d "$dir" ]]; then
         echo "Cloning $repo..."
-        git clone "https://github.com/hefest2026/$repo" "$dir"
+        git clone "git@github.com:hefest2026/$repo.git" "$dir"
     else
         echo "$repo already present, skipping clone."
     fi
