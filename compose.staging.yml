@@ -1,0 +1,75 @@
+services:
+  traefik:
+    image: traefik:v3.3
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:8067
+    ports:
+      # Only the HTTP entrypoint is published; no TLS.
+      - "8067:8067"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hefest
+      POSTGRES_PASSWORD: ${HEFEST_DB_PASSWORD:-hefest}
+      POSTGRES_DB: hefest_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No host port mapping — Postgres is reachable only on the compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hefest -d hefest_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # No host port mapping — internal only.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../hefest-api
+      dockerfile: Dockerfile.prod
+    env_file:
+      - .env
+    environment:
+      HEFEST_DB_URL: asyncpg://hefest:${HEFEST_DB_PASSWORD:-hefest}@postgres:5432/hefest_db
+      HEFEST_REDIS_URL: redis://redis:6379
+    # No source mount and no --reload: staging runs the built image.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.hefest-api.rule=PathPrefix(`/`)
+      - traefik.http.routers.hefest-api.entrypoints=web
+      - traefik.http.services.hefest-api.loadbalancer.server.port=8000
+    # No host port — traffic reaches the API only through Traefik.
+    # CMD (uvicorn, no --reload) comes from Dockerfile.prod.
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

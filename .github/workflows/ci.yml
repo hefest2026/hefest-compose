@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: ['**']
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: docker compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The api service references env_file: .env; a dummy file is enough for
+      # `config` to render. Real secrets live on the host, never in CI.
+      - name: Seed a dummy .env
+        run: cp .env.example .env
+      - name: Validate dev compose
+        run: docker compose -f compose.yml config -q
+      - name: Validate staging compose
+        run: docker compose -f compose.staging.yml config -q
