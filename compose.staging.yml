@@ -78,7 +78,10 @@ services:
       context: ../hefest-frontend
       dockerfile: Dockerfile
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/hefest-frontend/health"]
+      # 127.0.0.1 (not localhost): the image has no IPv6 listener, and localhost
+      # resolves to ::1 first inside the container -> connection refused -> the
+      # container is marked unhealthy -> Traefik drops the route.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/hefest-frontend/health"]
       interval: 10s
       timeout: 5s
       retries: 5
