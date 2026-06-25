@@ -12,6 +12,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      frontend:
+        condition: service_healthy
     restart: unless-stopped
 
   postgres:
@@ -46,10 +48,11 @@ services:
       dockerfile: Dockerfile.prod
     env_file:
       - .env
+      - path: .env.sso
+        required: false
     environment:
       HEFEST_DB_URL: asyncpg://hefest:${HEFEST_DB_PASSWORD:-hefest}@postgres:5432/hefest_db
       HEFEST_REDIS_URL: redis://redis:6379
-    # No source mount and no --reload: staging runs the built image.
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +71,30 @@ services:
       - traefik.http.services.hefest-api.loadbalancer.server.port=8000
     # No host port — traffic reaches the API only through Traefik.
     # CMD (uvicorn, no --reload) comes from Dockerfile.prod.
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../hefest-frontend
+      dockerfile: Dockerfile
+    healthcheck:
+      # 127.0.0.1 (not localhost): the image has no IPv6 listener, and localhost
+      # resolves to ::1 first inside the container -> connection refused -> the
+      # container is marked unhealthy -> Traefik drops the route.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/hefest-frontend/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      # Higher priority than the API's catch-all PathPrefix(`/`) so /hefest-frontend
+      # is served by nginx while everything else still reaches the API.
+      - traefik.http.routers.hefest-frontend.rule=PathPrefix(`/hefest-frontend`)
+      - traefik.http.routers.hefest-frontend.entrypoints=web
+      - traefik.http.routers.hefest-frontend.priority=100
+      - traefik.http.services.hefest-frontend.loadbalancer.server.port=80
+    # No host port — traffic reaches the SPA only through Traefik.
     restart: unless-stopped
 
 volumes:
