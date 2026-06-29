@@ -25,6 +25,38 @@ services:
       timeout: 5s
       retries: 10
 
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"   # web UI
+      - "1025:1025"   # SMTP
+    # axllent/mailpit is a minimal Go binary image without wget/curl/sh, so an
+    # in-container HTTP healthcheck is not reliably available. Worker gates on
+    # service_started instead (see task-9-report.md for details).
+
+  migrate:
+    build:
+      context: ../hefest-api
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      HEFEST_DB_URL: asyncpg://hefest:hefest@postgres:5432/hefest_db
+    volumes:
+      - ../hefest-api:/app
+      - api_venv:/app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    # Run migrations to completion, then exit. api/worker gate on this.
+    # The image entrypoint already runs `tortoise … migrate`; override the
+    # command so the container's job is just the migration and it exits 0.
+    entrypoint: ["uv", "run", "tortoise", "-c", "hefest.config.TORTOISE_ORM", "migrate"]
+    # Clear the inherited Dockerfile CMD so it isn't appended as trailing args
+    # to the migrate entrypoint.
+    command: []
+
   api:
     build:
       context: ../hefest-api
@@ -47,6 +79,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -54,6 +88,29 @@ services:
       retries: 5
       start_period: 30s
     command: uv run uvicorn hefest.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ../hefest-api
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      HEFEST_DB_URL: asyncpg://hefest:hefest@postgres:5432/hefest_db
+      HEFEST_SMTP_HOST: mailpit
+      HEFEST_SMTP_PORT: "1025"
+    volumes:
+      - ../hefest-api:/app
+      - api_venv:/app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    command: uv run python -m hefest.worker
 
   frontend:
     image: oven/bun:1.3.9-alpine
@@ -65,6 +122,9 @@ services:
       - frontend_node_modules:/app/node_modules
     ports:
       - "5173:5173"
+    environment:
+      # Server-side proxy target — not exposed to the browser bundle.
+      API_PROXY_TARGET: http://api:8000
     # Vite dev server under the same /hefest-frontend/ base as production.
     command: sh -c "bun install --frozen-lockfile && bun run dev --host 0.0.0.0 --port 5173"
 

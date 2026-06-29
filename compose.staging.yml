@@ -42,6 +42,25 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Mail catcher for staging: the worker delivers verification / registration
+  # emails here over SMTP (1025) instead of a real provider, and the captured
+  # mail is browsable through Traefik at /mailpit. MP_WEBROOT makes mailpit
+  # serve its UI and API under that prefix so no StripPrefix is needed.
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_WEBROOT: mailpit
+    # axllent/mailpit is a minimal Go binary image without wget/curl/sh, so an
+    # in-container HTTP healthcheck is not reliably available; consumers gate on
+    # service_started.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.hefest-mailpit.rule=PathPrefix(`/mailpit`)
+      - traefik.http.routers.hefest-mailpit.entrypoints=web
+      - traefik.http.routers.hefest-mailpit.priority=100
+      - traefik.http.services.hefest-mailpit.loadbalancer.server.port=8025
+    restart: unless-stopped
+
   api:
     build:
       context: ../hefest-api
@@ -53,6 +72,11 @@ services:
     environment:
       HEFEST_DB_URL: asyncpg://hefest:${HEFEST_DB_PASSWORD:-hefest}@postgres:5432/hefest_db
       HEFEST_REDIS_URL: redis://redis:6379
+      # NOTE: email_verify_url is intentionally left at the API default (web
+      # frontend). It is a single global setting, so overriding it to the mobile
+      # scheme would also break web-origin verification. Mobile doesn't need it:
+      # with HEFEST_ENV=dev the API returns verify_token from /register and the
+      # app verifies directly. A client-aware verify URL is a separate API task.
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,6 +95,35 @@ services:
       - traefik.http.services.hefest-api.loadbalancer.server.port=8000
     # No host port — traffic reaches the API only through Traefik.
     # CMD (uvicorn, no --reload) comes from Dockerfile.prod.
+    restart: unless-stopped
+
+  # Notification delivery worker — drains the notification_jobs outbox and
+  # sends email via mailpit. Without it, every enqueued job (email verification,
+  # registration/waitlist/promotion notices) would sit `pending` forever.
+  worker:
+    build:
+      context: ../hefest-api
+      dockerfile: Dockerfile.prod
+    env_file:
+      - .env
+    environment:
+      HEFEST_DB_URL: asyncpg://hefest:${HEFEST_DB_PASSWORD:-hefest}@postgres:5432/hefest_db
+      HEFEST_SMTP_HOST: mailpit
+      HEFEST_SMTP_PORT: "1025"
+      HEFEST_SMTP_USE_TLS: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      # Gate on the API (not a migrate service — there isn't one here): the
+      # shared entrypoint migrates on startup, and waiting for the API to be
+      # healthy means migrations are already applied, so the worker's own
+      # entrypoint migrate is a harmless no-op rather than a concurrent race.
+      api:
+        condition: service_healthy
+    # ENTRYPOINT (docker-entrypoint.sh) runs migrations, then execs this command.
+    command: ["uv", "run", "python", "-m", "hefest.worker"]
     restart: unless-stopped
 
   frontend:
