@@ -72,10 +72,11 @@ services:
     environment:
       HEFEST_DB_URL: asyncpg://hefest:${HEFEST_DB_PASSWORD:-hefest}@postgres:5432/hefest_db
       HEFEST_REDIS_URL: redis://redis:6379
-      # Verification emails deep-link into the mobile app instead of the web
-      # frontend, so the link opens hefest-mobile's verify-email route on a
-      # phone. The API appends ?token=<jwt>. (HEF-41 staging-email dependency.)
-      HEFEST_EMAIL_VERIFY_URL: hefestmobile://verify-email
+      # NOTE: email_verify_url is intentionally left at the API default (web
+      # frontend). It is a single global setting, so overriding it to the mobile
+      # scheme would also break web-origin verification. Mobile doesn't need it:
+      # with HEFEST_ENV=dev the API returns verify_token from /register and the
+      # app verifies directly. A client-aware verify URL is a separate API task.
     depends_on:
       postgres:
         condition: service_healthy
